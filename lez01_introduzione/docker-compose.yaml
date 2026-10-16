@@ -1,6 +1,9 @@
 services:
   webserver-uno:
-    image: tomcat:9.0
+    image: tomcat:11.0
 
   webserver-due:
     image: nginx:latest
+
+  database:
+    image: mysql

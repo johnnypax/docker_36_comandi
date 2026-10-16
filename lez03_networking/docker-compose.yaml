@@ -1,0 +1,14 @@
+services:
+  webserver-uno:
+    image: tomcat:11.0
+    ports:
+      - "1234:8080"
+
+  webserver-due:
+    image: nginx:latest
+    ports:
+      - "1235:80"
+
+  test:
+    image: alpine
+    command: ping webserver-uno
