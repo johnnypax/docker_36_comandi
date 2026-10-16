@@ -1,0 +1,5 @@
+services:
+  crash-demo:
+    image: ubuntu:latest
+    command: sh -c "echo Running... && sleep 3 && exit 1"
+    restart: on-failure:4
