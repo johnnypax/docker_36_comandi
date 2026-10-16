@@ -10,6 +10,8 @@ services:
       timeout: 3s
       retries: 5
       interval: 5s
+    networks:
+      - network_backend
 
   backend:
     image: tomcat:9.0.123-jre25-temurin-noble
@@ -17,6 +19,9 @@ services:
       - "8080:8080"
     depends_on:
       - db
+    networks:
+      - network_backend
+      - network_frontend
 
   frontend:
     image: nginx:latest
@@ -24,3 +29,11 @@ services:
       - "8081:80"
     depends_on:
       - backend
+    networks:
+      - network_frontend
+
+networks:
+  network_backend:
+    driver: bridge
+  network_frontend:
+    driver: bridge
