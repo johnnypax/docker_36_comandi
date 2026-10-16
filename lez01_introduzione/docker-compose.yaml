@@ -1,0 +1,6 @@
+services:
+  webserver-uno:
+    image: tomcat:9.0
+
+  webserver-due:
+    image: nginx:latest
