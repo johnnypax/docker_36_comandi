@@ -10,20 +10,6 @@ filebeat.inputs: # Apre la configurazione degli input utilizzati da Filebeat.
           overwrite_keys: true # Permette ai campi JSON di sostituire eventuali campi Filebeat omonimi.
           expand_keys: true # Espande eventuali campi ECS rappresentati attraverso la dot notation.
           add_error_key: true # Aggiunge informazioni diagnostiche quando il JSON non può essere interpretato.
-# ------------ Secondario
-  - type: filestream # Secondo input: eventi DNS.
-    id: siem-simulator-dns # Identificatore univoco dell'input DNS.
-    enabled: true # Abilita questo input.
-    paths: # File monitorati dall'input.
-      - /var/log/logsim/dns.json # File generato dal profilo DNS.
-    parsers: # Configura il parsing del contenuto.
-      - ndjson: # Ogni riga viene interpretata come documento JSON.
-          target: "" # Porta i campi ECS direttamente alla root.
-          overwrite_keys: true # Consente al JSON di sovrascrivere campi omonimi.
-          expand_keys: true # Espande eventuali campi ECS scritti con dot notation.
-          add_error_key: true # Registra eventuali problemi di parsing.
-
-
 
 setup.ilm.enabled: false # Disabilita ILM temporaneamente per il laboratorio didattico.
 setup.template.name: "siem-events" # Definisce il nome del template Elasticsearch.
