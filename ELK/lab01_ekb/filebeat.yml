@@ -1,0 +1,37 @@
+filebeat.inputs: # Apre la configurazione degli input utilizzati da Filebeat.
+  - type: filestream # Utilizza filestream per seguire il file di log nel tempo.
+    id: siem-simulator-ssh # Assegna un ID univoco all'input.
+    enabled: true # Abilita l'input.
+    paths: # Definisce la lista dei percorsi monitorati.
+      - /var/log/logsim/ssh.json # Legge esclusivamente il file SSH JSONL del simulatore.
+    parsers: # Definisce i parser applicati alle righe lette.
+      - ndjson: # Interpreta una riga come un documento JSON.
+          target: "" # Inserisce i campi JSON direttamente alla root dell'evento.
+          overwrite_keys: true # Permette ai campi JSON di sostituire eventuali campi Filebeat omonimi.
+          expand_keys: true # Espande eventuali campi ECS rappresentati attraverso la dot notation.
+          add_error_key: true # Aggiunge informazioni diagnostiche quando il JSON non può essere interpretato.
+# ------------ Secondario
+  - type: filestream # Secondo input: eventi DNS.
+    id: siem-simulator-dns # Identificatore univoco dell'input DNS.
+    enabled: true # Abilita questo input.
+    paths: # File monitorati dall'input.
+      - /var/log/logsim/dns.json # File generato dal profilo DNS.
+    parsers: # Configura il parsing del contenuto.
+      - ndjson: # Ogni riga viene interpretata come documento JSON.
+          target: "" # Porta i campi ECS direttamente alla root.
+          overwrite_keys: true # Consente al JSON di sovrascrivere campi omonimi.
+          expand_keys: true # Espande eventuali campi ECS scritti con dot notation.
+          add_error_key: true # Registra eventuali problemi di parsing.
+
+
+
+setup.ilm.enabled: false # Disabilita ILM temporaneamente per il laboratorio didattico.
+setup.template.name: "siem-events" # Definisce il nome del template Elasticsearch.
+setup.template.pattern: "siem-events-*" # Definisce quali indici devono utilizzare il template.
+
+output.elasticsearch: # Configura Elasticsearch come destinazione degli eventi.
+  hosts: ["https://es01:9200"] # Raggiunge Elasticsearch attraverso il nome del servizio nella rete Compose.
+  username: "elastic" # Utilizza l'utente amministrativo per questo primo laboratorio controllato.
+  password: "${ELASTIC_PASSWORD}" # Recupera la password dalla variabile d'ambiente ELASTIC_PASSWORD.
+  ssl.certificate_authorities: ["/usr/share/filebeat/certs/ca/ca.crt"] # Utilizza la CA del LAB 1 per verificare Elasticsearch.
+  index: "siem-events-%{[agent.version]}-%{+yyyy.MM.dd}" # Scrive gli eventi in un indice giornaliero siem-events.

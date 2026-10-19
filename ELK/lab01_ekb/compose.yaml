@@ -1,0 +1,142 @@
+services: # Definisce tutti i container che compongono il nostro ambiente.
+
+  setup: # Container temporaneo utilizzato per preparare certificati e credenziali.
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION} # Usa la stessa immagine Elasticsearch definita tramite STACK_VERSION.
+    user: "0" # Esegue il container come root perché deve creare e modificare i file dei certificati.
+    volumes: # Definisce i volumi montati all'interno del container.
+      - certs:/usr/share/elasticsearch/config/certs # Condivide i certificati con Elasticsearch e Kibana.
+    command: # Esegue lo script Bash utilizzato per inizializzare la sicurezza.
+      - bash
+      - -c
+      - |
+        if [ ! -f config/certs/ca/ca.crt ]; then
+          echo "Creazione della Certificate Authority";
+          bin/elasticsearch-certutil ca --silent --pem -out config/certs/ca.zip;
+          unzip config/certs/ca.zip -d config/certs;
+        fi;
+        if [ ! -f config/certs/es01/es01.crt ]; then
+          echo "Creazione del certificato di es01";
+          echo -ne "instances:\n  - name: es01\n    dns:\n      - es01\n      - localhost\n    ip:\n      - 127.0.0.1\n" > config/certs/instances.yml;
+          bin/elasticsearch-certutil cert --silent --pem -out config/certs/certs.zip --in config/certs/instances.yml --ca-cert config/certs/ca/ca.crt --ca-key config/certs/ca/ca.key;
+          unzip config/certs/certs.zip -d config/certs;
+        fi;
+        chown -R root:root config/certs;
+        find config/certs -type d -exec chmod 750 {} \;;
+        find config/certs -type f -exec chmod 640 {} \;;
+        echo "Attendo Elasticsearch";
+        until curl -s --cacert config/certs/ca/ca.crt https://es01:9200 | grep -q "missing authentication credentials"; do sleep 5; done;
+        echo "Configurazione password kibana_system";
+        until curl -s -X POST --cacert config/certs/ca/ca.crt -u "elastic:${ELASTIC_PASSWORD}" -H "Content-Type: application/json" https://es01:9200/_security/user/kibana_system/_password -d "{\"password\":\"${KIBANA_PASSWORD}\"}" | grep -q "^{}"; do sleep 5; done;
+        echo "Setup completato";
+    healthcheck: # Definisce il controllo utilizzato da Compose per verificare il completamento della prima fase del setup.
+      test: ["CMD-SHELL", "[ -f config/certs/es01/es01.crt ]"] # Considera il setup pronto quando il certificato del nodo es01 è stato creato.
+      interval: 2s # Ripete il controllo ogni due secondi.
+      timeout: 5s # Considera fallito il singolo controllo dopo cinque secondi.
+      retries: 60 # Permette fino a sessanta tentativi prima di dichiarare il servizio non disponibile.
+
+  es01: # Definisce il nostro unico nodo Elasticsearch.
+    depends_on: # Specifica le dipendenze necessarie prima dell'avvio del nodo.
+      setup: # Indica che Elasticsearch dipende dal servizio setup.
+        condition: service_healthy # Avvia Elasticsearch soltanto dopo la creazione dei certificati.
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION} # Utilizza l'immagine ufficiale Elasticsearch della versione indicata nel file .env.
+    container_name: es01 # Assegna al container il nome es01.
+    volumes: # Definisce i volumi utilizzati dal nodo Elasticsearch.
+      - certs:/usr/share/elasticsearch/config/certs # Monta all'interno di Elasticsearch i certificati generati dal servizio setup.
+      - esdata01:/usr/share/elasticsearch/data # Salva i dati Elasticsearch in un volume persistente.
+    ports: # Espone le porte necessarie verso il computer host.
+      - "${ES_PORT}:9200" # Espone la REST API HTTPS di Elasticsearch sulla porta configurata nel file .env.
+    environment: # Definisce le principali impostazioni Elasticsearch tramite variabili d'ambiente.
+      - node.name=es01 # Assegna al nodo Elasticsearch il nome es01.
+      - cluster.name=${CLUSTER_NAME} # Assegna al cluster il nome definito nel file .env.
+      - discovery.type=single-node # Comunica a Elasticsearch che il laboratorio utilizza un cluster composto da un solo nodo.
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD} # Imposta la password iniziale dell'utente amministrativo elastic.
+      - bootstrap.memory_lock=true # Chiede a Elasticsearch di evitare lo swap della memoria quando possibile.
+      - xpack.security.enabled=true # Abilita le funzionalità di sicurezza Elasticsearch.
+      - xpack.security.http.ssl.enabled=true # Abilita TLS sull'interfaccia HTTP utilizzata dalle API REST.
+      - xpack.security.http.ssl.key=certs/es01/es01.key # Specifica la chiave privata utilizzata dal nodo per HTTPS.
+      - xpack.security.http.ssl.certificate=certs/es01/es01.crt # Specifica il certificato TLS utilizzato dal nodo.
+      - xpack.security.http.ssl.certificate_authorities=certs/ca/ca.crt # Specifica la Certificate Authority considerata attendibile.
+      - xpack.security.transport.ssl.enabled=true # Abilita TLS anche sul transport layer utilizzato internamente dai nodi Elasticsearch.
+      - xpack.security.transport.ssl.key=certs/es01/es01.key # Specifica la chiave privata utilizzata dal transport layer.
+      - xpack.security.transport.ssl.certificate=certs/es01/es01.crt # Specifica il certificato utilizzato dal transport layer.
+      - xpack.security.transport.ssl.certificate_authorities=certs/ca/ca.crt # Specifica la CA utilizzata per verificare i certificati sul transport layer.
+      - xpack.security.transport.ssl.verification_mode=certificate # Richiede la verifica dei certificati nelle comunicazioni sul transport layer.
+      - xpack.license.self_generated.type=basic # Utilizza automaticamente la licenza Basic per il laboratorio.
+    mem_limit: ${MEM_LIMIT} # Limita la memoria del container al valore definito nel file .env.
+    ulimits: # Configura alcuni limiti del processo all'interno del container.
+      memlock: # Configura il limite relativo al blocco della memoria.
+        soft: -1 # Rimuove il limite soft relativo alla memoria bloccabile.
+        hard: -1 # Rimuove il limite hard relativo alla memoria bloccabile.
+    healthcheck: # Definisce il controllo di salute del nodo Elasticsearch.
+      test: ["CMD-SHELL", "curl -s --cacert config/certs/ca/ca.crt https://localhost:9200 | grep -q 'missing authentication credentials'"] # Verifica che Elasticsearch risponda correttamente tramite HTTPS.
+      interval: 10s # Ripete il controllo di salute ogni dieci secondi.
+      timeout: 10s # Considera fallito un singolo controllo dopo dieci secondi.
+      retries: 60 # Permette sessanta tentativi prima di considerare Elasticsearch non disponibile.
+
+  kibana: # Definisce il servizio Kibana utilizzato come interfaccia dello stack.
+    depends_on: # Specifica i servizi che devono essere pronti prima di avviare Kibana.
+      setup: # Dipendenza dal container di inizializzazione.
+        condition: service_completed_successfully # Attende che il setup abbia configurato completamente anche kibana_system.
+      es01: # Dipendenza dal nodo Elasticsearch.
+        condition: service_healthy # Avvia Kibana soltanto quando Elasticsearch risulta healthy.
+    image: docker.elastic.co/kibana/kibana:${STACK_VERSION} # Utilizza l'immagine ufficiale Kibana della stessa versione di Elasticsearch.
+    container_name: kibana # Assegna al container il nome kibana.
+    volumes: # Definisce i volumi utilizzati da Kibana.
+      - certs:/usr/share/kibana/config/certs # Monta la CA necessaria per verificare il certificato HTTPS di Elasticsearch.
+      - kibanadata:/usr/share/kibana/data # Mantiene persistenti i dati locali utilizzati da Kibana.
+    ports: # Espone Kibana verso il browser del computer host.
+      - "${KIBANA_PORT}:5601" # Pubblica la porta 5601 utilizzando il valore configurato nel file .env.
+    environment: # Definisce la configurazione principale di Kibana.
+      - SERVERNAME=kibana # Imposta il nome logico del server Kibana.
+      - ELASTICSEARCH_HOSTS=https://es01:9200 # Indica a Kibana dove trovare Elasticsearch all'interno della rete Compose.
+      - ELASTICSEARCH_USERNAME=kibana_system # Utilizza l'account tecnico kibana_system per la comunicazione server-to-server.
+      - ELASTICSEARCH_PASSWORD=${KIBANA_PASSWORD} # Utilizza la password configurata dal container setup.
+      - ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES=config/certs/ca/ca.crt # Indica a Kibana quale CA utilizzare per verificare il certificato Elasticsearch.
+    mem_limit: ${MEM_LIMIT} # Limita la memoria massima utilizzabile dal container Kibana.
+    healthcheck: # Definisce il controllo utilizzato per verificare che Kibana risponda.
+      test: ["CMD-SHELL", "curl -s -I http://localhost:5601 | grep -q 'HTTP/1.1 302 Found'"] # Verifica che Kibana restituisca il redirect previsto quando è disponibile.
+      interval: 10s # Ripete il controllo ogni dieci secondi.
+      timeout: 10s # Considera fallito il singolo controllo dopo dieci secondi.
+      retries: 60 # Permette sessanta tentativi prima di dichiarare Kibana non disponibile.
+
+  filebeat: # Definisce il servizio Filebeat responsabile della raccolta dei log.
+    image: docker.elastic.co/beats/filebeat:${STACK_VERSION} # Utilizza Filebeat della stessa versione dello stack Elasticsearch.
+    container_name: filebeat # Assegna il nome filebeat al container.
+    user: root # Esegue Filebeat come root nel laboratorio per evitare problemi di accesso ai volumi montati.
+    depends_on: # Definisce i servizi che devono essere disponibili prima dell'avvio di Filebeat.
+      es01: # Specifica Elasticsearch come dipendenza.
+        condition: service_healthy # Attende che Elasticsearch risulti healthy prima di avviare Filebeat.
+      siem-log-simulator: # Specifica il simulatore come ulteriore dipendenza.
+        condition: service_started # Richiede che il container del simulatore sia stato avviato.
+    volumes: # Definisce file e volumi visibili da Filebeat.
+      - ./filebeat.yml:/usr/share/filebeat/filebeat.yml:ro # Monta la configurazione Filebeat in sola lettura.
+      - logsim-data:/var/log/logsim:ro # Monta in sola lettura lo stesso volume nel quale il simulatore scrive i log.
+      - certs:/usr/share/filebeat/certs:ro # Monta in sola lettura la CA necessaria per la connessione HTTPS.
+      - filebeatdata:/usr/share/filebeat/data # Conserva lo stato interno utilizzato da Filebeat per seguire i file.
+    environment: # Definisce le variabili d'ambiente disponibili all'interno di Filebeat.
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD} # Passa a Filebeat la password Elasticsearch definita nel file .env.
+    command: ["filebeat", "-e", "--strict.perms=false"] # Avvia Filebeat mostrando i log su stderr e rilassando il controllo dei permessi sul file di configurazione.
+
+  siem-log-simulator: # Definisce il servizio che simulerà le nostre sorgenti di log.
+    image: archety/siem-log-simulator:latest # Utilizza l'immagine Docker del nostro simulatore SIEM.
+    container_name: siem-log-simulator # Assegna un nome facilmente riconoscibile al container.
+    ports: # Definisce le porte pubblicate verso il computer host.
+      - "3000:3000" # Espone sulla porta 3000 la REST API del simulatore.
+    environment: # Definisce la configurazione runtime del simulatore.
+      - AUTO_ENABLED=false # Disabilita inizialmente la generazione automatica per controllare manualmente gli eventi.
+      - LOG_DIRECTORY=/var/log/logsim # Indica la directory nella quale il simulatore deve scrivere i file di log.
+      - LOG_LAYOUT=per-profile # Crea un file differente per ogni profilo di log generato.
+    volumes: # Definisce i volumi utilizzati dal simulatore.
+      - logsim-data:/var/log/logsim # Salva i log generati nel volume condiviso logsim-data.
+
+volumes: # Dichiara i Docker Volume utilizzati dai servizi.
+  certs: # Volume persistente contenente Certificate Authority, certificati e chiavi.
+    driver: local # Utilizza il driver Docker locale predefinito.
+  esdata01: # Volume persistente dedicato ai dati del nodo Elasticsearch es01.
+    driver: local # Utilizza il driver Docker locale predefinito.
+  kibanadata: # Volume persistente dedicato ai dati locali di Kibana.
+    driver: local # Utilizza il driver Docker locale predefinito.
+  logsim-data: # Dichiara il volume che conterrà i log prodotti dal simulatore.
+    driver: local # Utilizza il driver Docker locale standard per memorizzare i dati.
+  filebeatdata: # Dichiara il volume utilizzato da Filebeat per conservare il proprio stato.
+    driver: local # Utilizza lo storage locale gestito da Docker.
